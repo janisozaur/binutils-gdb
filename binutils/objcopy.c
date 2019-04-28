@@ -209,6 +209,7 @@ static struct section_add *dump_sections;
 /* If non-NULL the argument to --add-gnu-debuglink.
    This should be the filename to store in the .gnu_debuglink section.  */
 static const char * gnu_debuglink_filename = NULL;
+static unsigned long gnu_debuglink_crc32;
 
 /* Whether to convert debugging information.  */
 static bfd_boolean convert_debugging = FALSE;
@@ -1832,6 +1833,42 @@ add_redefine_syms_file (const char *filename)
   fclose (file);
 }
 
+static bfd_boolean
+calculate_gnu_debuglink_crc32(void)
+{
+  bfd_boolean result = TRUE;
+  /* Preprocess calculating the gnu_debuglink's target CRC32 here avoid doing
+     that for each of the objects inside the archive. */
+  if (gnu_debuglink_filename != NULL)
+    {
+      FILE *handle;
+      size_t count;
+      static unsigned char buffer[8 * 1024];
+      unsigned long crc32 = 0;
+
+      /* Make sure that we can read the file.
+	 XXX - Should we attempt to locate the debug info file using the same
+	 algorithm as gdb ?  At the moment, since we are creating the
+	 .gnu_debuglink section, we insist upon the user providing us with a
+	 correct-for-section-creation-time path, but this need not conform to
+	 the gdb location algorithm.  */
+      handle = fopen (gnu_debuglink_filename, FOPEN_RB);
+      if (handle == NULL)
+	{
+	  fatal(_("cannot create debug link section `%s': %s"), gnu_debuglink_filename, strerror (errno));
+	  bfd_set_error (bfd_error_system_call);
+	  result = FALSE;
+	  goto cleanup_and_exit;
+	}
+      while ((count = fread (buffer, 1, sizeof buffer, handle)) > 0)
+	crc32 = bfd_calc_gnu_debuglink_crc32 (crc32, buffer, count);
+      fclose (handle);
+cleanup_and_exit:
+      gnu_debuglink_crc32 = crc32;
+    }
+  return result;
+}
+
 /* Copy unknown object file IBFD onto OBFD.
    Returns TRUE upon success, FALSE otherwise.  */
 
@@ -1925,7 +1962,7 @@ typedef struct objcopy_internal_note
   bfd_vma            end;
   bfd_boolean        modified;
 } objcopy_internal_note;
-  
+
 /* Returns TRUE if a gap does, or could, exist between the address range
    covered by PNOTE1 and PNOTE2.  */
 
@@ -2003,7 +2040,7 @@ merge_gnu_build_notes (bfd * abfd, asection * sec, bfd_size_type size, bfd_byte 
       if (relcount != 0)
 	goto done;
     }
-  
+
   /* Make a copy of the notes and convert to our internal format.
      Minimum size of a note is 12 bytes.  */
   pnote = pnotes = (objcopy_internal_note *) xcalloc ((size / 12), sizeof (* pnote));
@@ -2079,7 +2116,7 @@ merge_gnu_build_notes (bfd * abfd, asection * sec, bfd_size_type size, bfd_byte 
 	     address.  */
 	  end = (bfd_vma) -1;
 	  break;
-	  
+
 	case 8:
 	  if (! is_64bit (abfd))
 	    {
@@ -2104,7 +2141,7 @@ merge_gnu_build_notes (bfd * abfd, asection * sec, bfd_size_type size, bfd_byte 
 	  start = bfd_get_64 (abfd, pnote->note.descdata);
 	  end = bfd_get_64 (abfd, pnote->note.descdata + 8);
 	  break;
-	  
+
 	default:
 	  err = _("corrupt GNU build attribute note: bad description size");
 	  goto done;
@@ -2779,7 +2816,7 @@ copy_object (bfd *ibfd, bfd *obfd, const bfd_arch_info_type *input_arch)
       if (osec && is_merged_note_section (ibfd, osec))
 	{
 	  bfd_size_type size;
-	  
+
 	  size = bfd_get_section_size (osec);
 	  if (size == 0)
 	    {
@@ -3163,7 +3200,7 @@ copy_object (bfd *ibfd, bfd *obfd, const bfd_arch_info_type *input_arch)
   if (gnu_debuglink_filename != NULL)
     {
       if (! bfd_fill_in_gnu_debuglink_section
-	  (obfd, gnu_debuglink_section, gnu_debuglink_filename))
+	  (obfd, gnu_debuglink_section, gnu_debuglink_filename, gnu_debuglink_crc32))
 	{
 	  bfd_nonfatal_message (NULL, obfd, NULL,
 				_("cannot fill debug link section `%s'"),
@@ -5597,6 +5634,9 @@ copy_main (int argc, char *argv[])
   if (tmpname == NULL)
     fatal (_("warning: could not create temporary file whilst copying '%s', (error: %s)"),
 	   input_filename, strerror (errno));
+
+  if (gnu_debuglink_filename != NULL)
+    calculate_gnu_debuglink_crc32();
 
   copy_file (input_filename, tmpname, input_target, output_target, input_arch);
   if (status == 0)
