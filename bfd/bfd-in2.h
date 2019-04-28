@@ -1182,7 +1182,8 @@ struct bfd_section *bfd_create_gnu_debuglink_section
    (bfd *abfd, const char *filename);
 
 bfd_boolean bfd_fill_in_gnu_debuglink_section
-   (bfd *abfd, struct bfd_section *sect, const char *filename);
+   (bfd *abfd, struct bfd_section *sect, const char *filename,
+   unsigned long crc32);
 
 char *bfd_follow_build_id_debuglink (bfd *abfd, const char *dir);
 

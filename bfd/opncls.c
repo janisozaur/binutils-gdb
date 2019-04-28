@@ -1717,13 +1717,15 @@ FUNCTION
 
 SYNOPSIS
 	bfd_boolean bfd_fill_in_gnu_debuglink_section
-	  (bfd *abfd, struct bfd_section *sect, const char *filename);
+	  (bfd *abfd, struct bfd_section *sect, const char *filename,
+	  unsigned long crc32);
 
 DESCRIPTION
 	Takes a @var{BFD} and containing a .gnu_debuglink section @var{SECT}
 	and fills in the contents of the section to contain a link to the
 	specified @var{filename}.  The filename should be relative to the
-	current directory.
+	current directory. @var{crc32} should contain precomputed CRC of the
+	file.
 
 RETURNS
 	<<TRUE>> is returned if all is ok.  Otherwise <<FALSE>> is returned
@@ -1733,15 +1735,12 @@ RETURNS
 bfd_boolean
 bfd_fill_in_gnu_debuglink_section (bfd *abfd,
 				   struct bfd_section *sect,
-				   const char *filename)
+				   const char *filename,
+				   unsigned long crc32)
 {
   bfd_size_type debuglink_size;
-  unsigned long crc32;
   char * contents;
   bfd_size_type crc_offset;
-  FILE * handle;
-  static unsigned char buffer[8 * 1024];
-  size_t count;
   size_t filelen;
 
   if (abfd == NULL || sect == NULL || filename == NULL)
@@ -1749,24 +1748,6 @@ bfd_fill_in_gnu_debuglink_section (bfd *abfd,
       bfd_set_error (bfd_error_invalid_operation);
       return FALSE;
     }
-
-  /* Make sure that we can read the file.
-     XXX - Should we attempt to locate the debug info file using the same
-     algorithm as gdb ?  At the moment, since we are creating the
-     .gnu_debuglink section, we insist upon the user providing us with a
-     correct-for-section-creation-time path, but this need not conform to
-     the gdb location algorithm.  */
-  handle = _bfd_real_fopen (filename, FOPEN_RB);
-  if (handle == NULL)
-    {
-      bfd_set_error (bfd_error_system_call);
-      return FALSE;
-    }
-
-  crc32 = 0;
-  while ((count = fread (buffer, 1, sizeof buffer, handle)) > 0)
-    crc32 = bfd_calc_gnu_debuglink_crc32 (crc32, buffer, count);
-  fclose (handle);
 
   /* Strip off any path components in filename,
      now that we no longer need them.  */
