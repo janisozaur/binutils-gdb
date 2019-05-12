@@ -20,6 +20,9 @@
 #ifndef VALPRINT_H
 #define VALPRINT_H
 
+#include <string>
+#include "cli/cli-option.h"
+
 /* This is used to pass formatting options to various value-printing
    functions.  */
 struct value_print_options
@@ -93,6 +96,11 @@ struct value_print_options
      points, if any.  */
   int symbol_print;
 };
+
+/* Create an option_def_group for the value_print options, with OPTS
+   as context.  */
+extern gdb::option::option_def_group make_value_print_options_def_group
+  (value_print_options *opts);
 
 /* The global print options set by the user.  In general this should
    not be directly accessed, except by set/show commands.  Ordinary

@@ -45,11 +45,13 @@
 #include "charset.h"
 #include "arch-utils.h"
 #include "cli/cli-utils.h"
+#include "cli/cli-option.h"
 #include "cli/cli-script.h"
 #include "cli/cli-style.h"
 #include "common/format.h"
 #include "source.h"
 #include "common/byte-vector.h"
+#include "common/gdb_optional.h"
 
 /* Last specified output format.  */
 
@@ -1144,13 +1146,13 @@ print_command_parse_format (const char **expp, const char *cmdname,
   *expp = exp;
 }
 
-/* Print VAL to console according to *FMTP, including recording it to
-   the history.  */
+/* Print VAL to console according to FMT and OPTS, including recording
+   it to the history.  */
 
-void
-print_value (struct value *val, const struct format_data *fmtp)
+static void
+print_value (value *val, const value_print_options &opts,
+	     const format_data &fmt)
 {
-  struct value_print_options opts;
   int histindex = record_latest_value (val);
 
   annotate_value_history_begin (histindex, value_type (val));
@@ -1159,28 +1161,46 @@ print_value (struct value *val, const struct format_data *fmtp)
 
   annotate_value_history_value ();
 
-  get_formatted_print_options (&opts, fmtp->format);
-  opts.raw = fmtp->raw;
-
-  print_formatted (val, fmtp->size, &opts, gdb_stdout);
+  print_formatted (val, fmt.size, &opts, gdb_stdout);
   printf_filtered ("\n");
 
   annotate_value_history_end ();
 }
 
-/* Evaluate string EXP as an expression in the current language and
-   print the resulting value.  EXP may contain a format specifier as the
-   first argument ("/x myvar" for example, to print myvar in hex).  */
+/* Print VAL to console according to *FMTP, including recording it to
+   the history.  */
+
+void
+print_value (struct value *val, const struct format_data *fmtp)
+{
+  value_print_options opts;
+  get_formatted_print_options (&opts, fmtp->format);
+  opts.raw = fmtp->raw;
+  print_value (val, opts, *fmtp);
+}
+
+/* Implementation of the "print" and "call" commands.  */
 
 static void
-print_command_1 (const char *exp, int voidprint)
+print_command_1 (const char *args, int voidprint)
 {
   struct value *val;
   struct format_data fmt;
+  value_print_options opts;
 
-  print_command_parse_format (&exp, "print", &fmt);
+  get_user_print_options (&opts);
+  /* Override global settings with explicit options, if any.  */
+  auto group = make_value_print_options_def_group (&opts);
+  gdb::option::process_options (&args, true, group);
 
-  if (exp && *exp)
+  print_command_parse_format (&args, "print", &fmt);
+
+  opts.format = fmt.format;
+  opts.raw = fmt.raw;
+
+  const char *exp = args;
+
+  if (exp != NULL && *exp)
     {
       expression_up expr = parse_expression (exp);
       val = evaluate_expression (expr.get ());
@@ -1190,7 +1210,23 @@ print_command_1 (const char *exp, int voidprint)
 
   if (voidprint || (val && value_type (val) &&
 		    TYPE_CODE (value_type (val)) != TYPE_CODE_VOID))
-    print_value (val, &fmt);
+    print_value (val, opts, fmt);
+}
+
+/* Completer for the "print" and "call" commands.  */
+
+void
+print_command_completer (struct cmd_list_element *ignore,
+			 completion_tracker &tracker,
+			 const char *text, const char * /*word*/)
+{
+  /* Override global settings with explicit options, if any.  */
+  const auto group = make_value_print_options_def_group (nullptr);
+  if (gdb::option::complete_options (tracker, &text, true, group))
+    return;
+
+  const char *word = advance_to_expression_complete_word_point (tracker, text);
+  expression_completer (ignore, tracker, text, word);
 }
 
 static void
@@ -2761,7 +2797,7 @@ Usage: call EXP\n\
 The argument is the function name and arguments, in the notation of the\n\
 current working language.  The result is printed and saved in the value\n\
 history, if it is not void."));
-  set_cmd_completer (c, expression_completer);
+  set_cmd_completer_handle_brkchars (c, print_command_completer);
 
   add_cmd ("variable", class_vars, set_command, _("\
 Evaluate expression EXP and assign result to variable VAR\n\
@@ -2775,9 +2811,18 @@ This may usually be abbreviated to simply \"set\"."),
 	   &setlist);
   add_alias_cmd ("var", "variable", class_vars, 0, &setlist);
 
-  c = add_com ("print", class_vars, print_command, _("\
+  const auto print_opts = make_value_print_options_def_group (nullptr);
+
+  static std::string print_help = gdb::option::build_help (N_("\
 Print value of expression EXP.\n\
-Usage: print[/FMT] EXP\n\
+Usage: print [[OPTION]... --] [EXP]\n\
+\n\
+Options:\n\
+%OPTIONS%\
+Note: because this command accepts arbitrary expressions, if you\n\
+specify any command option, you must use a double dash (\"--\")\n\
+to mark the end of argument processing.  E.g.: \"print -o -- myobj\".\n\
+\n\
 Variables accessible are those of the lexical environment of the selected\n\
 stack frame, plus all those whose scope is global or an entire file.\n\
 \n\
@@ -2797,8 +2842,12 @@ where FOO is stored, etc.  FOO must be an expression whose value\n\
 resides in memory.\n\
 \n\
 EXP may be preceded with /FMT, where FMT is a format letter\n\
-but no count or size letter (see \"x\" command)."));
-  set_cmd_completer (c, expression_completer);
+but no count or size letter (see \"x\" command)."),
+					      print_opts);
+
+  c = add_com ("print", class_vars, print_command, print_help.c_str ());
+  set_cmd_completer (c, print_command_completer);
+  set_cmd_completer_handle_brkchars (c, print_command_completer);
   add_com_alias ("p", "print", class_vars, 1);
   add_com_alias ("inspect", "print", class_vars, 1);
 
